@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://kube-prometheus-stack-prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: Elasticsearch
+    type: elasticsearch
+    access: proxy
+    url: http://elasticsearch-master:9200
+    jsonData:
+      index: "logs-*"
+      timeField: "@timestamp"
+      esVersion: "8.0.0"
+    editable: false

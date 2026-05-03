@@ -1,0 +1,107 @@
+groups:
+  - name: security_platform_alerts
+    interval: 30s
+    rules:
+
+      # ── CPU Anomaly ───────────────────────────────────────────
+      - alert: HighCpuUsage
+        expr: |
+          sum(rate(container_cpu_usage_seconds_total{container!="POD",container!=""}[5m]))
+          by (pod, namespace) * 100 > 85
+        for: 2m
+        labels:
+          severity: HIGH
+          mitre_tactic: Impact
+          mitre_technique: T1496
+        annotations:
+          summary: "High CPU usage on {{ $labels.pod }}"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} CPU usage is {{ $value | humanizePercentage }}"
+
+      # ── Memory Pressure ───────────────────────────────────────
+      - alert: HighMemoryUsage
+        expr: |
+          sum(container_memory_working_set_bytes{container!="POD",container!=""}) by (pod, namespace)
+          / sum(container_spec_memory_limit_bytes{container!=""}) by (pod, namespace) * 100 > 90
+        for: 2m
+        labels:
+          severity: HIGH
+          mitre_tactic: Impact
+          mitre_technique: T1499
+        annotations:
+          summary: "High memory on {{ $labels.pod }}"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} memory at {{ $value | humanizePercentage }}"
+
+      # ── HTTP Error Rate ───────────────────────────────────────
+      - alert: HighHttpErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) by (service, namespace)
+          / sum(rate(http_requests_total[5m])) by (service, namespace) > 0.10
+        for: 1m
+        labels:
+          severity: CRITICAL
+          mitre_tactic: Impact
+          mitre_technique: T1499
+        annotations:
+          summary: "High HTTP 5xx rate on {{ $labels.service }}"
+          description: "{{ $labels.namespace }}/{{ $labels.service }} error rate: {{ $value | humanizePercentage }}"
+
+      # ── Pod Restart Loop ──────────────────────────────────────
+      - alert: PodCrashLooping
+        expr: |
+          rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 5
+        for: 0m
+        labels:
+          severity: HIGH
+          mitre_tactic: Persistence
+          mitre_technique: T1525
+        annotations:
+          summary: "Pod crash-looping: {{ $labels.pod }}"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has restarted {{ $value }} times in 15 minutes"
+
+      # ── Latency SLO ───────────────────────────────────────────
+      - alert: HighRequestLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service, namespace)
+          ) * 1000 > 1000
+        for: 2m
+        labels:
+          severity: MEDIUM
+          mitre_tactic: Impact
+          mitre_technique: T1499
+        annotations:
+          summary: "High P95 latency on {{ $labels.service }}"
+          description: "P95 latency for {{ $labels.namespace }}/{{ $labels.service }} is {{ $value }}ms"
+
+      # ── Network Exfiltration Indicator ────────────────────────
+      - alert: HighNetworkEgress
+        expr: |
+          sum(rate(container_network_transmit_bytes_total[5m])) by (pod, namespace)
+          > 50000000  # 50MB/s
+        for: 1m
+        labels:
+          severity: CRITICAL
+          mitre_tactic: Exfiltration
+          mitre_technique: T1041
+        annotations:
+          summary: "Excessive network egress from {{ $labels.pod }}"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} egress: {{ $value | humanize }}B/s"
+
+      # ── Platform Health ───────────────────────────────────────
+      - alert: MLEngineDown
+        expr: up{job="ml-engine"} == 0
+        for: 1m
+        labels:
+          severity: CRITICAL
+        annotations:
+          summary: "ML Engine is unreachable"
+          description: "The anomaly detection ML engine has been down for more than 1 minute"
+
+      - alert: KafkaConsumerLag
+        expr: kafka_consumer_group_lag > 50000
+        for: 5m
+        labels:
+          severity: HIGH
+        annotations:
+          summary: "Kafka consumer lag on {{ $labels.topic }}"
+          description: "Consumer group {{ $labels.group }} lag: {{ $value }} messages on {{ $labels.topic }}"

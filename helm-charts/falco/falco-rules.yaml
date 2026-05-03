@@ -1,0 +1,132 @@
+# ─────────────────────────────────────────────────────────────────
+# Custom Falco Security Rules
+# TCS iON AIP 225 — Cloud-native Security Platform
+# Deploy: kubectl apply -f falco-rules.yaml -n security
+# ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: security
+data:
+  custom_rules.yaml: |
+
+    # ── Container Escape Attempts ─────────────────────────────────
+    - rule: Container Escape via nsenter
+      desc: Detects use of nsenter to escape container boundaries
+      condition: >
+        spawned_process and
+        proc.name = "nsenter" and
+        container.id != host
+      output: >
+        Container escape attempt via nsenter
+        (user=%user.name pod=%k8s.pod.name ns=%k8s.ns.name
+         container=%container.id cmd=%proc.cmdline)
+      priority: CRITICAL
+      tags: [container, escape, T1611]
+
+    - rule: Privileged Container Launched
+      desc: A privileged container was started
+      condition: >
+        container_started and
+        container.privileged = true and
+        not k8s.ns.name in (kube-system, monitoring, security)
+      output: >
+        Privileged container launched
+        (pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
+      priority: CRITICAL
+      tags: [container, privilege-escalation, T1611]
+
+    # ── Credential Access ─────────────────────────────────────────
+    - rule: Read Sensitive File (Secrets)
+      desc: Detects reading of sensitive credential files in containers
+      condition: >
+        open_read and
+        (fd.name contains "/etc/shadow" or
+         fd.name contains "/etc/passwd" or
+         fd.name contains "/.ssh/id_rsa" or
+         fd.name contains "/.aws/credentials" or
+         fd.name startswith "/var/run/secrets/kubernetes.io") and
+        not proc.name in (sshd, cloud-init, aws)
+      output: >
+        Sensitive file read
+        (user=%user.name file=%fd.name pod=%k8s.pod.name ns=%k8s.ns.name
+         proc=%proc.name container=%container.id)
+      priority: HIGH
+      tags: [credential-access, T1552]
+
+    # ── Execution / Shell Spawned ─────────────────────────────────
+    - rule: Shell Spawned in Container
+      desc: A shell was spawned in a production container
+      condition: >
+        spawned_process and
+        container and
+        shell_procs and
+        not k8s.ns.name in (kube-system, monitoring) and
+        not proc.pname in (runc, containerd-shim)
+      output: >
+        Shell spawned inside container
+        (user=%user.name shell=%proc.name pod=%k8s.pod.name
+         ns=%k8s.ns.name parent=%proc.pname container=%container.id)
+      priority: WARNING
+      tags: [execution, T1059]
+
+    # ── Network Scanning ──────────────────────────────────────────
+    - rule: Outbound Connection to Suspicious Port
+      desc: Container making connections to suspicious ports (common C2 ports)
+      condition: >
+        outbound and
+        container and
+        fd.sport in (4444, 1337, 31337, 8888, 9999, 6666, 7777)
+      output: >
+        Suspicious outbound connection
+        (pod=%k8s.pod.name ns=%k8s.ns.name
+         dstip=%fd.rip dstport=%fd.rport container=%container.id)
+      priority: CRITICAL
+      tags: [c2, exfiltration, T1041]
+
+    # ── File System Changes ───────────────────────────────────────
+    - rule: Write to /etc in Container
+      desc: Unexpected modification to /etc in a running container
+      condition: >
+        open_write and
+        fd.name startswith "/etc/" and
+        container and
+        not proc.name in (apt, dpkg, yum, rpm, chef-client, puppet)
+      output: >
+        Unexpected write to /etc
+        (user=%user.name file=%fd.name pod=%k8s.pod.name
+         ns=%k8s.ns.name proc=%proc.name)
+      priority: HIGH
+      tags: [persistence, T1525]
+
+    - rule: Binary File Dropped in /tmp
+      desc: Executable binary written to /tmp in a container
+      condition: >
+        open_write and
+        fd.name startswith "/tmp/" and
+        (fd.name endswith ".sh" or fd.name endswith ".py" or
+         fd.name endswith ".elf" or fd.name endswith ".bin") and
+        container
+      output: >
+        Potential malware dropped in /tmp
+        (file=%fd.name user=%user.name pod=%k8s.pod.name
+         ns=%k8s.ns.name container=%container.id)
+      priority: CRITICAL
+      tags: [execution, T1059]
+
+    # ── Crypto Mining Detection ───────────────────────────────────
+    - rule: Crypto Miner Process Detected
+      desc: Known crypto mining processes or stratum protocol usage
+      condition: >
+        spawned_process and
+        (proc.name in (xmrig, minerd, cpuminer, cgminer, bfgminer) or
+         proc.cmdline contains "stratum+tcp" or
+         proc.cmdline contains "stratum+ssl" or
+         proc.cmdline contains "xmrig")
+      output: >
+        Crypto mining process detected
+        (proc=%proc.name cmd=%proc.cmdline pod=%k8s.pod.name
+         ns=%k8s.ns.name container=%container.id)
+      priority: CRITICAL
+      tags: [resource-hijacking, T1496]
